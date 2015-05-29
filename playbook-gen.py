@@ -11,13 +11,19 @@ class PlaybookGen(object):
         self.group_name = 'rhs-servers'
         self.args = self.parse_arguments()
         self.dest_dir = self.helper.get_file_dir_path('.', self.args.dest_dir or 'playbooks')
-        if not os.path.isdir(self.dest_dir):
-            self.helper.exec_cmds('mkdir', self.dest_dir)
+        self.force = self.args.force
         self.config_file = self.args.config_file.name
         self.parse_read_config()
         self.hosts = self.helper.get_host_names(self.config_parse)
+        self.varfile, self.var_file_name = self.helper.validate_params(
+                self.config_parse, self.hosts, self.group_name, self.dest_dir, self.force)
         self.create_inventory_file()
-        GroupVarsGen(self.config_parse, self.dest_dir, self.group_name)
+        if not self.varfile:
+            print "Provide either configuration specific to each hosts " \
+                    "or provide common configurations for all. Exiting!"
+            sys.exit(0)
+        if self.varfile == 'group_vars':
+            GroupVarsGen(self.config_parse, self.dest_dir, self.group_name, self.var_file_name[0])
 
 
     def parse_arguments(self):
@@ -29,6 +35,12 @@ class PlaybookGen(object):
         parser.add_argument('-d', dest='dest_dir',
                 help="Directory to save backend setup playbooks.",
                 default='playbooks')
+        parser.add_argument('-f', dest='force', const='y',
+            default='n',
+            action='store',
+            nargs='?',
+            help="Force files and directories to be " \
+                    "overwritten if already exists.")
         try:
             return parser.parse_args()
         except IOError as msg:
@@ -45,6 +57,59 @@ class PlaybookGen(object):
 
 class HelperMethods(object):
 
+    def validate_params(self, config_parse, hosts, group_name, dirname, force):
+        self.force = force
+        self.group_name = group_name
+        self.hosts = hosts
+        self.config_parse = config_parse
+        self.dirname = dirname
+        self.create_required_files_and_dirs()
+        return self.varfile, self.filepath
+
+    def mk_dir(self, dirlists):
+        for each in dirlists:
+            if not os.path.isdir(each):
+                self.exec_cmds('mkdir', each)
+            elif self.force == 'n':
+                print "Directory %s already exists. Use -f option to overwrite" % each
+                sys.exit(0)
+            else:
+                continue
+
+    def touch_files(self, filelists):
+        for each in filelists:
+            try:
+                os.remove(each)
+            except OSError:
+                pass
+            self.exec_cmds('touch', each)
+
+    def create_required_files_and_dirs(self):
+        options = self.config_get_sections(self.config_parse)
+        set_options = set(options)
+        set_host_options = set(self.hosts)
+        other_sections = [x for x in options if x != 'hosts']
+        if not other_sections:
+            self.varfile = None
+            self.filepath = None
+        elif set_options.intersection(set_host_options):
+            if set_host_options.issubset(set_options):
+                self.varfile = 'host_vars'
+                self.filepath = self.hosts
+                print "Creating host_vars for all the hosts"
+            else:
+                print "Give configurations for all the hosts. Exiting!"
+                sys.exit(0)
+        else:
+            self.varfile = 'group_vars'
+            self.filepath = [self.get_file_dir_path(self.dirname,
+                                         self.varfile + '/' + self.group_name)]
+        if self.varfile:
+            dirlist = [ self.dirname,
+                    self.get_file_dir_path(self.dirname, self.varfile)]
+            self.mk_dir(dirlist)
+            self.touch_files(self.filepath)
+
     def insufficient_param_count(self, section, count):
         print "Please provide %s names for %s devices else leave the field empty" % (section, count)
         return False
@@ -55,14 +120,14 @@ class HelperMethods(object):
         self.write_yaml(data, yamlfile, False)
 
     def write_device_data(self, config_parse, yamlfile):
-        options = self.config_get_options(config_parse, 'devices')
-        self.write_unassociated_data('devices', options, yamlfile)
+        self.config_parse = config_parse
+        self.yamlfile = yamlfile
+        options = self.config_get_options(self.config_parse, 'devices')
+        self.write_unassociated_data('devices', options, self.yamlfile)
         return len(options)
 
-    def write_optional_data(self, group_options, config_parse, yamlfile, device_count, varfile):
+    def write_optional_data(self, group_options, device_count, varfile):
         self.group_options = group_options
-        self.config_parse =  config_parse
-        self.yamlfile =  yamlfile
         self.device_count = device_count
         self.varfile = varfile
         self.write_vg_data()
@@ -201,19 +266,16 @@ class HelperMethods(object):
             sys.exit(0)
 
 class GroupVarsGen(object):
-    def __init__(self, config_parse, dirname, group_name):
+    def __init__(self, config_parse, dirname, group_name, filename):
+        self.group_vars_file_path = filename
         self.helper = HelperMethods()
         self.config_parse = config_parse
         self.dirname = dirname
         self.group_name = group_name
-        self.group_vars_dir = self.helper.get_file_dir_path(self.dirname, 'group_vars')
-        self.helper.exec_cmds('mkdir', self.group_vars_dir)
-        self.group_vars_file_path = self.helper.get_file_dir_path(self.group_vars_dir, self.group_name)
-        self.helper.exec_cmds('touch', self.group_vars_file_path)
         ret = self.create_group_vars()
         if not ret:
             print "Not creating group vars since no common option for devices provided"
-            return
+            sys.exit(0)
 
     def create_group_vars(self):
         options = self.helper.config_get_sections(self.config_parse)
@@ -226,7 +288,7 @@ class GroupVarsGen(object):
         else:
             return False
         group_options.remove('devices')
-        return self.helper.write_optional_data(group_options, self.config_parse, self.group_vars_file_path, self.device_count, self.varfile)
+        return self.helper.write_optional_data(group_options, self.device_count, self.varfile)
 
 
 
