@@ -45,6 +45,103 @@ class PlaybookGen(object):
 
 class HelperMethods(object):
 
+    def insufficient_param_count(self, section, count):
+        print "Please provide %s names for %s devices else leave the field empty" % (section, count)
+        return False
+
+    def write_unassociated_data(self, section, options, yamlfile):
+        data = {}
+        data[section]  = options
+        self.write_yaml(data, yamlfile, False)
+
+    def write_device_data(self, config_parse, yamlfile):
+        options = self.config_get_options(config_parse, 'devices')
+        self.write_unassociated_data('devices', options, yamlfile)
+        return len(options)
+
+    def write_optional_data(self, group_options, config_parse, yamlfile, device_count, varfile):
+        self.group_options = group_options
+        self.config_parse =  config_parse
+        self.yamlfile =  yamlfile
+        self.device_count = device_count
+        self.varfile = varfile
+        self.write_vg_data()
+        self.write_pool_data()
+        self.write_lv_data()
+        self.write_lvols_data()
+        self.write_mountpoints_data()
+        self.write_mntpath_data()
+        return True
+
+    def get_var_file_write_options(self, section, section_name):
+        if section in self.group_options:
+            options = (self.varfile == 'group') and self.config_get_options(self.config_parse, section) or ''
+            if len(options) < self.device_count:
+                return self.insufficient_param_count(section_name, self.device_count)
+        else:
+            options = []
+            pattern = {'vgs': 'RHS_vg',
+                       'pools': 'RHS_pool',
+                       'lvs': 'RHS_lv',
+                       'mountpoints': '/rhs/brick'
+                      }[section]
+            for i in range(1, self.device_count + 1):
+                options.append(pattern + str(i))
+        return options
+
+    def write_vg_data(self):
+        self.vgs = self.get_var_file_write_options('vgs', 'volume group')
+        self.write_unassociated_data('vgs', self.vgs, self.yamlfile)
+
+    def write_pool_data(self):
+        self.pools = self.get_var_file_write_options('pools', 'logical pool')
+        data = []
+        for i, j in zip(self.pools, self.vgs):
+            pools = {}
+            pools['pool'] = i
+            pools['vg'] = j
+            data.append(pools)
+        data_dict = dict(pools = data)
+        self.write_yaml(data_dict, self.yamlfile, True)
+
+    def write_lv_data(self):
+        self.lvs = self.get_var_file_write_options('lvs', 'logical volume')
+        data = []
+        for i, j, k in zip(self.pools, self.vgs, self.lvs):
+            pools = {}
+            pools['pool'] = i
+            pools['vg'] = j
+            pools['lv'] = k
+            data.append(pools)
+        data_dict = dict(lvpools = data)
+        self.write_yaml(data_dict, self.yamlfile, True)
+
+    def write_lvols_data(self):
+        self.lvols = ['/dev/' + i + '/' + j for i, j in zip(self.vgs, self.lvs)]
+        data_dict = {}
+        data_dict['lvols'] = self.lvols
+        self.write_yaml(data_dict, self.yamlfile, False)
+
+    def write_mountpoints_data(self):
+        self.mntpts = self.get_var_file_write_options('mountpoints', 'volume group')
+        data_dict = {}
+        data_dict['mountpoints'] = self.mntpts
+        self.write_yaml(data_dict, self.yamlfile, True)
+
+    def write_mntpath_data(self):
+        self.devices = []
+        for i, j in zip(self.vgs, self.lvs):
+            self.devices.append('/dev/%s/%s' % (i, j))
+        data = []
+        for i, j in zip(self.mntpts, self.devices):
+            mntpath = {}
+            mntpath['path'] = i
+            mntpath['device'] = j
+            data.append(mntpath)
+        data_dict = dict(mntpath = data)
+        self.write_yaml(data_dict, self.yamlfile, True)
+
+
     def get_host_names(self, config_parse):
         try:
             return self.config_get_options(config_parse, 'hosts')
@@ -52,10 +149,12 @@ class HelperMethods(object):
             print "Cannot find the section hosts in the config. The generator can't proceed. Exiting!"
             sys.exit(0)
 
-    def write_yaml(self, data_dict, yml_file):
-        print data_dict
-        with open(yml_file, 'w') as outfile:
-            outfile.write(yaml.dump(data_dict, default_flow_style=False))
+    def write_yaml(self, data_dict, yml_file, data_flow):
+        with open(yml_file, 'a+') as outfile:
+            if not data_flow:
+                outfile.write(yaml.dump(data_dict, default_flow_style=data_flow))
+            else:
+                outfile.write(yaml.dump(data_dict))
 
 
     def config_section_map(self, config_parse, section, option):
@@ -111,18 +210,23 @@ class GroupVarsGen(object):
         self.helper.exec_cmds('mkdir', self.group_vars_dir)
         self.group_vars_file_path = self.helper.get_file_dir_path(self.group_vars_dir, self.group_name)
         self.helper.exec_cmds('touch', self.group_vars_file_path)
-        self.create_group_vars()
+        ret = self.create_group_vars()
+        if not ret:
+            print "Not creating group vars since no common option for devices provided"
+            return
 
     def create_group_vars(self):
         options = self.helper.config_get_sections(self.config_parse)
         self.hosts = self.helper.get_host_names(self.config_parse)
         host_options = self.hosts + ['hosts']
         group_options = [val for val in options if val not in host_options]
-        data = {}
-        for section in group_options:
-            options = self.helper.config_get_options(self.config_parse, section)
-            data[section]  = options
-            self.helper.write_yaml(data, self.group_vars_file_path)
+        if 'devices' in group_options:
+            self.device_count = self.helper.write_device_data(self.config_parse, self.group_vars_file_path)
+            self.varfile = 'group'
+        else:
+            return False
+        group_options.remove('devices')
+        return self.helper.write_optional_data(group_options, self.config_parse, self.group_vars_file_path, self.device_count, self.varfile)
 
 
 
