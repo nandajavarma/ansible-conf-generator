@@ -35,6 +35,9 @@ class PlaybookGen(object):
                 self.var_file_name[0])
         else:
             HostVarsGen(self.config_parse, self.var_file_name, self.hosts)
+        print "To setup backend as per your configurations, as root run:\n" \
+            "ansible-playbook -i %s/ansible_hosts " \
+            "%s/setup-backend.yml" % (self.args.dest_dir, self.args.dest_dir)
 
     def parse_arguments(self):
         parser = argparse.ArgumentParser(version='1.0')
@@ -90,8 +93,8 @@ class HelperMethods(object):
             if not os.path.isdir(each):
                 self.exec_cmds('mkdir', each)
             elif self.force == 'n':
-                print "Directory %s already exists. " \
-                        "Use -f option to overwrite" % each
+                print "Directory '%s' already exists. " \
+                    "Use -f option to overwrite" % each.split('/')[-1]
                 sys.exit(0)
             else:
                 continue
@@ -115,10 +118,10 @@ class HelperMethods(object):
         elif set_options.intersection(set_host_options):
             if set_host_options.issubset(set_options):
                 self.varfile = 'host_vars'
-                self.filepath = [ self.get_file_dir_path(
-                                    self.dirname,
-                                    self.varfile +
-                                    '/' + x) for x in self.hosts ]
+                self.filepath = [self.get_file_dir_path(
+                    self.dirname,
+                    self.varfile +
+                    '/' + x) for x in self.hosts]
             else:
                 print "Give configurations for all the hosts. Exiting!"
                 sys.exit(0)
@@ -139,7 +142,7 @@ class HelperMethods(object):
 
     def insufficient_param_count(self, section, count):
         print "Please provide %s names for %s devices " \
-                "else leave the field empty" % (section, count)
+            "else leave the field empty" % (section, count)
         return False
 
     def write_unassociated_data(self, section, options, yamlfile):
@@ -195,7 +198,6 @@ class HelperMethods(object):
         else:
             self.ret &= False
 
-
     def write_pool_data(self):
         self.pools = self.get_var_file_write_options('pools', 'logical pool')
         if self.pools:
@@ -227,7 +229,7 @@ class HelperMethods(object):
 
     def write_lvols_data(self):
         self.lvols = ['/dev/' + i + '/' + j for i, j in
-                zip(self.vgs, self.lvs)]
+                      zip(self.vgs, self.lvs)]
         if self.lvols:
             data_dict = {}
             data_dict['lvols'] = self.lvols
@@ -264,7 +266,7 @@ class HelperMethods(object):
             return self.config_get_options(config_parse, 'hosts')
         except:
             print "Cannot find the section hosts in the config." \
-                    " The generator can't proceed. Exiting!"
+                " The generator can't proceed. Exiting!"
             sys.exit(0)
 
     def write_yaml(self, data_dict, yml_file, data_flow):
@@ -348,12 +350,13 @@ class GroupVarsGen(object):
                 self.group_vars_file_path)
         else:
             print "Not creating group vars since no " \
-                    "common option for devices provided"
+                "common option for devices provided"
             sys.exit(0)
         group_options.remove('devices')
         return self.helper.write_optional_data(
             group_options,
             self.device_count)
+
 
 class HostVarsGen(object):
 
@@ -366,21 +369,28 @@ class HostVarsGen(object):
         if not ret:
             print "Error: Failed creation of hostvars!"
         else:
-            print "Host vars for each hosts created!"
+            print "Host vars for each hosts created!\n" \
+
 
     def create_host_vars(self):
         self.ret = True
         for each in self.hosts:
-            self.varfilepath = [x for x in self.filenames if x.split('/')[-1] == each]
-            device_names =self.helper.config_section_map(self.config_parse, each, 'devices')
+            self.varfilepath = [
+                x for x in self.filenames if x.split('/')[-1] == each]
+            device_names = self.helper.config_section_map(
+                self.config_parse,
+                each,
+                'devices')
             if not device_names:
                 print "Not creating group vars since no " \
-                        "common option for devices provided"
+                    "common option for devices provided"
                 sys.exit(0)
             self.device_count = self.helper.write_device_data(
                 device_names.split(','),
                 self.varfilepath[0])
-            other_options = self.helper.config_get_options(self.config_parse, each)
+            other_options = self.helper.config_get_options(
+                self.config_parse,
+                each)
             group_sections = [x for x in other_options if x != 'devices']
             self.ret &= self.helper.write_optional_data(
                 group_sections,
